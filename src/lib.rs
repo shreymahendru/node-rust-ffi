@@ -1,10 +1,14 @@
+mod event_aggregator;
+
 use std::{thread, time::Duration};
 
-use neon::{
-    context::{Context, FunctionContext, ModuleContext}, result::{JsResult, NeonResult}, types::{JsFunction, JsNumber, JsObject, JsPromise, JsString, JsUndefined, JsValue}
-};
+use event_aggregator::{dispose_event_aggregator, initialize_event_aggregator, Event, EventAggregator};
 use neon::object::Object;
-
+use neon::{
+    context::{Context, FunctionContext, ModuleContext},
+    result::{JsResult, NeonResult},
+    types::{JsFunction, JsNumber, JsObject, JsPromise, JsString, JsUndefined, JsValue},
+};
 
 fn hello(mut cx: FunctionContext) -> JsResult<JsString> {
     Ok(cx.string("hello node"))
@@ -12,6 +16,13 @@ fn hello(mut cx: FunctionContext) -> JsResult<JsString> {
 
 fn get_num_cpu(mut cx: FunctionContext) -> JsResult<JsNumber> {
     let count = num_cpus::get() as f64;
+
+    let event = Event::Log {
+        message: format!("the value for count is {}", count),
+    };
+
+    EventAggregator::instance().publish(event);
+
     Ok(cx.number(count))
 }
 
@@ -24,6 +35,10 @@ fn long_async_task_on_native(mut cx: FunctionContext) -> JsResult<JsPromise> {
     let channel = cx.channel();
     std::thread::spawn(move || {
         for i in 0..count as i32 {
+            EventAggregator::instance().publish(Event::Log {
+                message: format!("running in thread i: {}", i),
+            });
+
             println!("running in thread i: {}", i);
             thread::sleep(Duration::from_secs(1));
         }
@@ -54,8 +69,8 @@ fn execute_callback(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     let count: f64 = cx.argument::<JsNumber>(0)?.value(&mut cx);
     let callback = cx.argument::<JsFunction>(1)?;
 
-    // let this = cx.this_value();
-    let this = cx.undefined();
+    let this = cx.this_value();
+    // let this = cx.undefined();
 
     for i in 0..count as i32 {
         println!("running in thread i: {}", i);
@@ -80,22 +95,19 @@ fn execute_callback_from_thread(mut cx: FunctionContext) -> JsResult<JsPromise> 
 
     let channel = cx.channel();
     std::thread::spawn(move || {
-
         for i in 0..count as i32 {
-
             println!("running in thread i: {}", i);
 
-
             let handle = channel.send(move |mut cx| {
-            let args = vec![cx.number(i).upcast::<JsValue>()];
-            // let this = cx.undefined();
+                let args = vec![cx.number(i).upcast::<JsValue>()];
+                // let this = cx.undefined();
 
                 let cb = callback.clone(&mut cx).into_inner(&mut cx);
                 let t = this.clone(&mut cx).into_inner(&mut cx);
 
                 cb.call(&mut cx, t, args)?;
 
-                Ok((this , callback))
+                Ok((this, callback))
             });
 
             (this, callback) = handle.join().unwrap();
@@ -108,8 +120,6 @@ fn execute_callback_from_thread(mut cx: FunctionContext) -> JsResult<JsPromise> 
 
     Ok(promise)
 }
-
-
 
 // fn async_fibonacci(mut cx: FunctionContext) -> JsResult<JsUndefined> {
 //     // These types (`f64`, `Root<JsFunction>`, `Channel`) may all be sent
@@ -141,7 +151,6 @@ fn execute_callback_from_thread(mut cx: FunctionContext) -> JsResult<JsPromise> 
 
 //     Ok(cx.undefined())
 // }
-
 
 // fn fibonacci(n: f64) -> f64 {
 //     if n <= 1.0 {
@@ -194,5 +203,9 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("execute_callback", execute_callback)?;
 
     cx.export_function("execute_callback_from_thread", execute_callback_from_thread)?;
+
+    cx.export_function("initialize_event_aggregator", initialize_event_aggregator)?;
+
+    cx.export_function("dispose_event_aggregator", dispose_event_aggregator)?;
     Ok(())
 }
